@@ -1,6 +1,6 @@
-# Project-1
-Project 1 - SAIT | Designing and Modelling a Real-World Software Feature System
+# Project-1: Designing and Modelling a Real-World Software Feature System
 Computational Thinking and Problem Solving (CMPS-3000-BSA)
+
 
 # E-Commerce CLI System
 
@@ -183,9 +183,10 @@ The absence of persistence and cryptographic password storage is intentional.
 ---
 
 ## Repository Structure
-── Project-1
+```
+Project-1
   ├── ecommerce_cli.py
   ├── README.md
   └── .gitignore
-
+```
 
