@@ -232,7 +232,7 @@ def search_products(keyword: str = "", max_price: Optional[float] = None,
     return results
 
 
-def compute_discount(subtotal: float, username: str, coupon_code: str) -> float:
+def compute_discount(subtotal: float, username: str, coupon_code: str) -> tuple[float, str | None]:
     """
     Example discount rules:
 
@@ -244,27 +244,38 @@ def compute_discount(subtotal: float, username: str, coupon_code: str) -> float:
     """
 
     discount = 0.0
+    lines: list[str] = []
+
+    # First order discount
     if is_first_order(username):
-        discount += 0.10 * subtotal
+        d = 0.10 * subtotal
+        discount += d
+        lines.append(f"First-order discount (10%): -{money(d)}")
 
-    code = coupon_code.strip().upper
-    if code == "SAVE10":
-        discount += 10.0
-    elif code == "SAVE20":
-        discount += 0.20 * subtotal
-    elif code:
-        ## unknown coupon entered
-        print(f"Invalid coupon code entered.")
+    # Coupon logic
+    code = coupon_code.strip().upper()
+    if code == "":
         pass
+    elif code == "SAVE10":
+        d = 10.0
+        discount += d
+        lines.append(f"Coupon {code}: -{money(d)}")
+    elif code == "SAVE20":
+        d = 0.20 * subtotal
+        discount += d
+        lines.append(f"Coupon {code} (20%): -{money(d)}")
+    else:
+        lines.append("Invalid coupon code entered. (First-order discount may still apply.)")
 
+    # Cap at 30% of subtotal
     cap = 0.30 * subtotal
     if discount > cap:
+        lines.append(f"Discount cap applied (max 30%): adjusted to -{money(cap)}")
         discount = cap
-    if discount < 0:
-        discount = 0
-    if discount > subtotal:
-        discount = subtotal
-    return discount
+
+    # Clamp to [0, subtotal]
+    discount = max(0.0, min(discount, subtotal))
+    return discount, lines
 
 
 def validate_payment(method: str, total: float) -> Tuple[bool, str]:
@@ -469,49 +480,62 @@ def checkout(sess: Session) -> None:
     clear_screen()
     print("CHECKOUT")
     hr()
+
     if not sess.cart:
-        print("Cart is emmpty.")
+        print("Cart is empty.")
         pause()
         return
-    
-    # Calculate subtotal + validate stock logic
+
+    # 1) Validate cart items and stock, compute subtotal
     subtotal = 0.0
     for sku, qty in sess.cart.items():
-        product = PRODUCTS.get(sku)
-        
-        if not product:
-            print(f"Missing product: {sku}. Remote it from cart.")
+        p = PRODUCTS.get(sku)
+        if not p:
+            print(f"Missing product: {sku}. Remove it from cart.")
             pause()
             return
-        if qty > product.in_stock:
-            print(f"Not enough stock for {product.name}. Requested {qty}, available {product.in_stock}.")
+        if qty <= 0:
+            print(f"Invalid quantity for {sku}.")
             pause()
             return
-        subtotal += product.price * qty
+        if qty > p.in_stock:
+            print(f"Not enough stock for {p.name}. Requested {qty}, available {p.in_stock}.")
+            pause()
+            return
+        subtotal += p.price * qty
 
     print(f"Subtotal: {money(subtotal)}")
+
+    # 2) Coupon + discount (now returns (discount, coupon_msg))
     coupon = input("Coupon code (optional): ").strip()
-    discount = compute_discount(subtotal, sess.user.username, coupon)
+    discount, discount_lines = compute_discount(subtotal, sess.user.username, coupon)
     total = max(0.0, subtotal - discount)
-    print(f"Discount: -{money(discount)}")
-    print(f"Total:      {money(total)}")
+
+    if discount_lines:
+        print("\nDiscount details:")
+        for line in discount_lines:
+            print(f"  - {line}")
+
+    print(f"\nDiscount total: -{money(discount)}")
+    print(f"Total:          {money(total)}")
     hr()
 
+    # 3) Payment method + validation
     method = input("Payment method (credit/debit/paypal): ").strip().lower()
     ok, msg = validate_payment(method, total)
     if not ok:
         print(msg)
         pause()
         return
-    
+
+    # 4) Fraud check (simulation)
     flagged = fraud_check(sess.user.username, total, method)
     if flagged:
-        print("Fraud check: FLAGGED (simulationAPICall). Order will be marked for review.")
-    
-    # Create order id
+        print("Fraud check: FLAGGED (simulatedAPICall). Order will be marked for review.")
+
+    # 5) Commit inventory + record order (only after validations succeed)
     order_id = f"ORD{len(ORDERS)+1:05d}"
 
-    # "Commit" inventory and order
     for sku, qty in sess.cart.items():
         PRODUCTS[sku].in_stock -= qty
 
@@ -526,10 +550,11 @@ def checkout(sess: Session) -> None:
         fraud_flagged=flagged
     ))
 
+    # Clear cart after successful checkout
     sess.cart.clear()
 
+    # 6) Confirmation screen
     clear_screen()
-
     print(r"""
       .-=========-.
       \'-=======-'/     ORDER CONFIRMED
@@ -543,9 +568,10 @@ def checkout(sess: Session) -> None:
     """)
 
     print(f"Order ID: {order_id}")
-    print(f"Total:      {money(total)}")
-    print("Status:  " + ("REVIEW" if flagged else "APPROVED (simulatedAPICall)"))
+    print(f"Total:    {money(total)}")
+    print("Status:   " + ("REVIEW" if flagged else "APPROVED (simulated)"))
     pause()
+
 
 
 def show_order_history(username: str) -> None:
@@ -620,7 +646,7 @@ def view_seller_products(seller_username: str) -> None:
     mine = [product for product in PRODUCTS.values() if product.seller == seller_username]
     
     if not mine:
-        print("(none)")
+        print(f"(none)")
         pause()
         return
     
